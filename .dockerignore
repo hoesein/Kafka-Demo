@@ -1,0 +1,10 @@
+**/bin/
+**/obj/
+.git/
+.vs/
+.github/
+Dockerfile*
+**/*.user
+**/*.suo
+*.db
+*.sqlite

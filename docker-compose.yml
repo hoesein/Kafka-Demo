@@ -1,0 +1,188 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: worker-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: workerdb
+      POSTGRES_USER: worker
+      POSTGRES_PASSWORD: workerpass
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U worker -d workerdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - worker-platform
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      KAFKA_OPTS: "-Dzookeeper.4lw.commands.whitelist=ruok"
+    ports:
+      - "2181:2181"
+    healthcheck:
+      test: ["CMD-SHELL", "echo 'ruok' | nc localhost 2181 | grep imok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      - worker-platform
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    restart: unless-stopped
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_ENABLE_KRAFT: "false"
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:29092 >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+    networks:
+      - worker-platform
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: worker-cluster
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+    networks:
+      - worker-platform
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:latest
+    container_name: schema-registry
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:29092
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+    networks:
+      - worker-platform
+
+  worker-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.Api
+    container_name: worker-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8082:8080"
+    environment:
+      DOTNET_ENVIRONMENT: Docker
+      ASPNETCORE_ENVIRONMENT: Docker
+      ASPNETCORE_URLS: http://+:8080
+      WorkerPlatform__Kafka__BootstrapServers: kafka:29092
+      WorkerPlatform__Database__DefaultConnectionString: Host=postgres;Port=5432;Database=workerdb;Username=worker;Password=workerpass;
+    restart: unless-stopped
+    networks:
+      - worker-platform
+
+  worker-database-producer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: worker-database-producer
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      DOTNET_ENVIRONMENT: Docker
+      ASPNETCORE_ENVIRONMENT: Docker
+      WORKER_TYPE: DatabaseProducer
+      WorkerPlatform__Kafka__BootstrapServers: kafka:29092
+      WorkerPlatform__Database__DefaultConnectionString: Host=postgres;Port=5432;Database=workerdb;Username=worker;Password=workerpass;
+    restart: unless-stopped
+    networks:
+      - worker-platform
+
+  worker-kafka-consumer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: worker-kafka-consumer
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      DOTNET_ENVIRONMENT: Docker
+      ASPNETCORE_ENVIRONMENT: Docker
+      WORKER_TYPE: KafkaConsumer
+      WorkerPlatform__Kafka__BootstrapServers: kafka:29092
+      WorkerPlatform__Database__DefaultConnectionString: Host=postgres;Port=5432;Database=workerdb;Username=worker;Password=workerpass;
+    restart: unless-stopped
+    networks:
+      - worker-platform
+
+  worker-notification:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: worker-notification
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      DOTNET_ENVIRONMENT: Docker
+      ASPNETCORE_ENVIRONMENT: Docker
+      WORKER_TYPE: Notification
+      WorkerPlatform__Kafka__BootstrapServers: kafka:29092
+      WorkerPlatform__Database__DefaultConnectionString: Host=postgres;Port=5432;Database=workerdb;Username=worker;Password=workerpass;
+    restart: unless-stopped
+    networks:
+      - worker-platform
+
+volumes:
+  postgres_data:
+
+networks:
+  worker-platform:
+    driver: bridge

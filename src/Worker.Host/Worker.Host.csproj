@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>dotnet-Worker.Host-d06f2d19-941c-41a9-8954-a77121b71e32</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Worker.Contracts\Worker.Contracts.csproj" />
+    <ProjectReference Include="..\Worker.Core\Worker.Core.csproj" />
+    <ProjectReference Include="..\Worker.Infrastructure\Worker.Infrastructure.csproj" />
+    <ProjectReference Include="..\Worker.Plugins\Worker.Plugins.csproj" />
+  </ItemGroup>
+</Project>
