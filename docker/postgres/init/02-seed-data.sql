@@ -13,12 +13,12 @@ VALUES
     (
         'database-producer',
         'DatabaseProducer',
-        '*/5 * * * *',
+        '*/1 * * * *',
         TRUE,
         3,
         120,
         250,
-        '{"Query":"SELECT * FROM notification_queue WHERE status = ''NEW''","KafkaTopic":"notification-topic","SourceConnectionString":"Host=db-one;Port=5432;Database=db_one;Username=worker;Password=workerpass;"}'::jsonb,
+        '{"Query":"SELECT * FROM \"CustomerInfo\" WHERE \"SyncStatus\" = ''Pending'';","KafkaTopic":"notification-topic","SourceConnectionString":"Host=host.docker.internal;Port=5432;Database=daiichi;Username=postgres;Password=toor;"}'::jsonb,
         'active'
     ),
     (
@@ -29,7 +29,7 @@ VALUES
         2,
         90,
         100,
-        '{"Topic":"sms-topic","ConsumerGroup":"sms-service","TargetConnectionString":"Host=db-two;Port=5432;Database=db_two;Username=worker;Password=workerpass;"}'::jsonb,
+        '{"Topic":"sms-topic","ConsumerGroup":"sms-service","TargetConnectionString":"Host=postgres;Port=5432;Database=workerdb;Username=worker;Password=workerpass;"}'::jsonb,
         'active'
     ),
     (
@@ -46,7 +46,7 @@ VALUES
 ON CONFLICT (name) DO NOTHING;
 
 INSERT INTO worker_definition_settings (worker_definition_id, setting_key, setting_value)
-SELECT id, 'Query', 'SELECT * FROM notification_queue WHERE status = ''NEW'''
+SELECT id, 'Query', 'SELECT * FROM "CustomerInfo" WHERE "SyncStatus" = ''Pending'';'
 FROM worker_definitions
 WHERE name = 'database-producer'
 ON CONFLICT (worker_definition_id, setting_key) DO NOTHING;
@@ -58,7 +58,7 @@ WHERE name = 'database-producer'
 ON CONFLICT (worker_definition_id, setting_key) DO NOTHING;
 
 INSERT INTO worker_definition_settings (worker_definition_id, setting_key, setting_value)
-SELECT id, 'SourceConnectionString', 'Host=db-one;Port=5432;Database=db_one;Username=worker;Password=workerpass;'
+SELECT id, 'SourceConnectionString', 'Host=host.docker.internal;Port=5432;Database=daiichi;Username=postgres;Password=toor;'
 FROM worker_definitions
 WHERE name = 'database-producer'
 ON CONFLICT (worker_definition_id, setting_key) DO NOTHING;
@@ -76,7 +76,7 @@ WHERE name = 'kafka-consumer'
 ON CONFLICT (worker_definition_id, setting_key) DO NOTHING;
 
 INSERT INTO worker_definition_settings (worker_definition_id, setting_key, setting_value)
-SELECT id, 'TargetConnectionString', 'Host=db-two;Port=5432;Database=db_two;Username=worker;Password=workerpass;'
+SELECT id, 'TargetConnectionString', 'Host=postgres;Port=5432;Database=workerdb;Username=worker;Password=workerpass;'
 FROM worker_definitions
 WHERE name = 'kafka-consumer'
 ON CONFLICT (worker_definition_id, setting_key) DO NOTHING;

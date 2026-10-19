@@ -3,6 +3,7 @@ using Confluent.Kafka;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using NpgsqlTypes;
 using Worker.Contracts;
 
 namespace Worker.Infrastructure;
@@ -40,23 +41,43 @@ public sealed class PostgresWorkerDataSource : IWorkerDataSource
 
             while (await reader.ReadAsync(cancellationToken) && messages.Count < batchSize)
             {
-                if (reader[0] is not null)
+                var payload = BuildJsonPayload(reader);
+                if (!string.IsNullOrWhiteSpace(payload))
                 {
-                    var value = reader.GetValue(0)?.ToString();
-                    if (!string.IsNullOrWhiteSpace(value))
-                    {
-                        messages.Add(value);
-                    }
+                    messages.Add(payload);
                 }
             }
 
             return messages;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to read pending messages from PostgreSQL for worker {WorkerName}.", workerName);
-            return Array.Empty<string>();
+            throw;
         }
+    }
+
+    private static string? BuildJsonPayload(NpgsqlDataReader reader)
+    {
+        if (reader.FieldCount == 1)
+        {
+            var singleValue = reader.GetValue(0);
+            return singleValue is DBNull ? null : singleValue.ToString();
+        }
+
+        var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < reader.FieldCount; i++)
+        {
+            var columnName = reader.GetName(i);
+            var value = reader.IsDBNull(i) ? null : reader.GetValue(i);
+            row[columnName] = value;
+        }
+
+        return JsonSerializer.Serialize(row);
     }
 
     private string? ResolveConnectionString(string? configuredConnectionString)
@@ -105,29 +126,35 @@ public sealed class KafkaProducerService : IKafkaProducerService, IDisposable
     }
 }
 
-public sealed class KafkaConsumerService : IKafkaConsumerService, IDisposable
+public sealed class KafkaConsumerService : IKafkaConsumerService
 {
-    private readonly IConsumer<Ignore, string> _consumer;
+    private readonly WorkerPlatformOptions _options;
     private readonly ILogger<KafkaConsumerService> _logger;
 
     public KafkaConsumerService(IOptions<WorkerPlatformOptions> options, ILogger<KafkaConsumerService> logger)
     {
+        _options = options.Value;
         _logger = logger;
-        var config = new ConsumerConfig
-        {
-            BootstrapServers = options.Value.Kafka.BootstrapServers,
-            GroupId = "worker-platform-group",
-            AutoOffsetReset = AutoOffsetReset.Earliest,
-            EnableAutoCommit = false,
-            EnableAutoOffsetStore = false
-        };
-
-        _consumer = new ConsumerBuilder<Ignore, string>(config).Build();
     }
 
     public Task<IReadOnlyCollection<string>> ConsumeAsync(string topic, string consumerGroup, int batchSize, CancellationToken cancellationToken)
     {
-        _consumer.Subscribe(topic);
+        ArgumentException.ThrowIfNullOrWhiteSpace(topic);
+        ArgumentException.ThrowIfNullOrWhiteSpace(consumerGroup);
+
+        var config = new ConsumerConfig
+        {
+            BootstrapServers = _options.Kafka.BootstrapServers,
+            GroupId = consumerGroup,
+            AutoOffsetReset = AutoOffsetReset.Earliest,
+            EnableAutoCommit = false,
+            EnableAutoOffsetStore = false,
+            SessionTimeoutMs = 30000,
+            HeartbeatIntervalMs = 3000
+        };
+
+        using var consumer = new ConsumerBuilder<Ignore, string>(config).Build();
+        consumer.Subscribe(topic);
 
         var items = new List<string>();
         var timeout = TimeSpan.FromSeconds(5);
@@ -136,7 +163,7 @@ public sealed class KafkaConsumerService : IKafkaConsumerService, IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var result = _consumer.Consume(timeout);
+            var result = consumer.Consume(timeout);
             if (result is null)
             {
                 break;
@@ -147,17 +174,23 @@ public sealed class KafkaConsumerService : IKafkaConsumerService, IDisposable
                 items.Add(result.Message.Value);
             }
 
-            _consumer.StoreOffset(result);
+            consumer.StoreOffset(result);
         }
 
-        _consumer.Commit();
-        _logger.LogInformation("Consumed {Count} message(s) from Kafka topic {Topic}.", items.Count, topic);
-        return Task.FromResult<IReadOnlyCollection<string>>(items);
-    }
+        if (items.Count > 0)
+        {
+            try
+            {
+                consumer.Commit();
+            }
+            catch (KafkaException ex)
+            {
+                _logger.LogWarning(ex, "Kafka commit did not store offsets for topic {Topic} and group {ConsumerGroup}.", topic, consumerGroup);
+            }
+        }
 
-    public void Dispose()
-    {
-        _consumer.Dispose();
+        _logger.LogInformation("Consumed {Count} message(s) from Kafka topic {Topic} for consumer group {ConsumerGroup}.", items.Count, topic, consumerGroup);
+        return Task.FromResult<IReadOnlyCollection<string>>(items);
     }
 }
 
@@ -201,7 +234,7 @@ public sealed class PostgresWorkerResultStore : IWorkerResultStore
                     connection);
 
                 insertQueue.Parameters.AddWithValue("messageKey", $"{workerName}-{Guid.NewGuid():N}");
-                insertQueue.Parameters.AddWithValue("payload", payload);
+                insertQueue.Parameters.Add("payload", NpgsqlDbType.Jsonb).Value = payload;
                 await insertQueue.ExecuteNonQueryAsync(cancellationToken);
             }
         }
@@ -261,7 +294,7 @@ public sealed class PostgresNotificationService : INotificationService
             });
 
             command.Parameters.AddWithValue("messageKey", $"notification-{Guid.NewGuid():N}");
-            command.Parameters.AddWithValue("payload", payload);
+            command.Parameters.Add("payload", NpgsqlDbType.Jsonb).Value = payload;
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
         catch (Exception ex)

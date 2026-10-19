@@ -108,6 +108,8 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8082:8080"
     environment:
@@ -116,6 +118,7 @@ services:
       ASPNETCORE_URLS: http://+:8080
       WorkerPlatform__Kafka__BootstrapServers: kafka:29092
       WorkerPlatform__Database__DefaultConnectionString: Host=postgres;Port=5432;Database=workerdb;Username=worker;Password=workerpass;
+      ConnectionStrings__DefaultConnectionString: Host=postgres;Port=5432;Database=workerdb;Username=worker;Password=workerpass;
     restart: unless-stopped
     networks:
       - worker-platform
@@ -130,12 +133,15 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       DOTNET_ENVIRONMENT: Docker
       ASPNETCORE_ENVIRONMENT: Docker
       WORKER_TYPE: DatabaseProducer
       WorkerPlatform__Kafka__BootstrapServers: kafka:29092
       WorkerPlatform__Database__DefaultConnectionString: Host=postgres;Port=5432;Database=workerdb;Username=worker;Password=workerpass;
+      ConnectionStrings__DefaultConnectionString: Host=postgres;Port=5432;Database=workerdb;Username=worker;Password=workerpass;
     restart: unless-stopped
     networks:
       - worker-platform
@@ -150,12 +156,15 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       DOTNET_ENVIRONMENT: Docker
       ASPNETCORE_ENVIRONMENT: Docker
       WORKER_TYPE: KafkaConsumer
       WorkerPlatform__Kafka__BootstrapServers: kafka:29092
       WorkerPlatform__Database__DefaultConnectionString: Host=postgres;Port=5432;Database=workerdb;Username=worker;Password=workerpass;
+      ConnectionStrings__DefaultConnectionString: Host=postgres;Port=5432;Database=workerdb;Username=worker;Password=workerpass;
     restart: unless-stopped
     networks:
       - worker-platform
@@ -170,12 +179,15 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       DOTNET_ENVIRONMENT: Docker
       ASPNETCORE_ENVIRONMENT: Docker
       WORKER_TYPE: Notification
       WorkerPlatform__Kafka__BootstrapServers: kafka:29092
       WorkerPlatform__Database__DefaultConnectionString: Host=postgres;Port=5432;Database=workerdb;Username=worker;Password=workerpass;
+      ConnectionStrings__DefaultConnectionString: Host=postgres;Port=5432;Database=workerdb;Username=worker;Password=workerpass;
     restart: unless-stopped
     networks:
       - worker-platform

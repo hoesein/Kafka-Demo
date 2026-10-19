@@ -26,7 +26,11 @@ public sealed class DatabaseProducerWorker : IWorkerHandler
         ArgumentNullException.ThrowIfNull(context);
 
         var query = context.Metadata.TryGetValue("Query", out var configuredQuery) ? configuredQuery : string.Empty;
-        var topic = context.Metadata.TryGetValue("KafkaTopic", out var configuredTopic) ? configuredTopic : "notification-topic";
+        var topic = context.Metadata.TryGetValue("KafkaTopic", out var configuredTopic)
+            ? configuredTopic
+            : context.Metadata.TryGetValue("Topic", out var topicValue)
+                ? topicValue
+                : "notification-topic";
         var batchSize = context.Metadata.TryGetValue("BatchSize", out var batchValue) && int.TryParse(batchValue, out var parsedBatch) ? parsedBatch : 100;
         var connectionString = context.Metadata.TryGetValue("SourceConnectionString", out var configuredSourceConnectionString)
             ? configuredSourceConnectionString
@@ -39,6 +43,16 @@ public sealed class DatabaseProducerWorker : IWorkerHandler
         if (string.IsNullOrWhiteSpace(query))
         {
             throw new InvalidOperationException("DatabaseProducer worker requires a Query in the worker metadata.");
+        }
+
+        if (batchSize <= 0)
+        {
+            throw new InvalidOperationException("DatabaseProducer worker requires a BatchSize greater than zero.");
+        }
+
+        if (string.IsNullOrWhiteSpace(topic))
+        {
+            throw new InvalidOperationException("DatabaseProducer worker requires a KafkaTopic or Topic in the worker metadata.");
         }
 
         _logger.LogInformation("Fetching pending rows for worker {WorkerName} with query {Query}.", context.WorkerName, query);

@@ -6,27 +6,29 @@ var builder = Host.CreateApplicationBuilder(args);
 
 builder.Services.AddWorkerPlatform(builder.Configuration);
 
+var workerTypeRegistrations = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase)
+{
+    ["DatabaseProducer"] = () => builder.Services.AddWorker<DatabaseProducerWorker>(),
+    ["KafkaConsumer"] = () => builder.Services.AddWorker<KafkaConsumerWorker>(),
+    ["Notification"] = () => builder.Services.AddWorker<NotificationWorker>()
+};
+
 var configuredWorkerTypes = Environment.GetEnvironmentVariable("WORKER_TYPE");
 var workerTypes = string.IsNullOrWhiteSpace(configuredWorkerTypes)
-    ? new[] { "DatabaseProducer", "KafkaConsumer", "Notification" }
+    ? workerTypeRegistrations.Keys.ToArray()
     : configuredWorkerTypes
         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
         .Distinct(StringComparer.OrdinalIgnoreCase)
         .ToArray();
 
-if (workerTypes.Contains("DatabaseProducer", StringComparer.OrdinalIgnoreCase))
+foreach (var workerType in workerTypes)
 {
-    builder.Services.AddWorker<DatabaseProducerWorker>();
-}
+    if (!workerTypeRegistrations.TryGetValue(workerType, out var registerWorker))
+    {
+        throw new InvalidOperationException($"Unsupported worker type '{workerType}'. Supported types: {string.Join(", ", workerTypeRegistrations.Keys)}");
+    }
 
-if (workerTypes.Contains("KafkaConsumer", StringComparer.OrdinalIgnoreCase))
-{
-    builder.Services.AddWorker<KafkaConsumerWorker>();
-}
-
-if (workerTypes.Contains("Notification", StringComparer.OrdinalIgnoreCase))
-{
-    builder.Services.AddWorker<NotificationWorker>();
+    registerWorker();
 }
 
 var host = builder.Build();
@@ -38,69 +40,15 @@ foreach (var handler in host.Services.GetServices<IWorkerHandler>())
 }
 
 var scheduler = host.Services.GetRequiredService<IWorkerScheduler>();
+var startupLogger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Worker.Host");
 await scheduler.StartAsync(CancellationToken.None);
 
 try
 {
+    startupLogger.LogInformation("Starting worker services in parallel: {WorkerTypes}", string.Join(", ", workerTypes));
     await host.RunAsync();
 }
 finally
 {
     await scheduler.StopAsync(CancellationToken.None);
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

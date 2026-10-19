@@ -20,6 +20,7 @@
 
   <ItemGroup>
 	<ProjectReference Include="..\..\src\Worker.Contracts\Worker.Contracts.csproj" />
+	<ProjectReference Include="..\..\src\Worker.Core\Worker.Core.csproj" />
 	<ProjectReference Include="..\..\src\Worker.Plugins\Worker.Plugins.csproj" />
   </ItemGroup>
 

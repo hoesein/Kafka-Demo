@@ -49,6 +49,34 @@ public class PluginWorkersTests
     }
 
     [Fact]
+    public async Task DatabaseProducerWorker_ShouldUseTopicAlias()
+    {
+        var dataSource = Substitute.For<IWorkerDataSource>();
+        var kafkaProducer = Substitute.For<IKafkaProducerService>();
+        var logger = Substitute.For<ILogger<DatabaseProducerWorker>>();
+
+        var worker = new DatabaseProducerWorker(dataSource, kafkaProducer, logger);
+        var context = new WorkerContext
+        {
+            WorkerName = "DatabaseProducer",
+            WorkerType = "DatabaseProducer",
+            Metadata = new Dictionary<string, string>
+            {
+                ["Query"] = "SELECT payload FROM notification_queue",
+                ["Topic"] = "notification-topic",
+                ["BatchSize"] = "1"
+            }
+        };
+
+        dataSource.GetPendingMessagesAsync("DatabaseProducer", "SELECT payload FROM notification_queue", 1, null, Arg.Any<CancellationToken>())
+            .Returns(new[] { "message" });
+
+        await worker.ExecuteAsync(context, CancellationToken.None);
+
+        await kafkaProducer.Received(1).PublishAsync("notification-topic", Arg.Is<IReadOnlyCollection<string>>(messages => messages.Count == 1), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task KafkaConsumerWorker_ShouldConsume_AndStoreMessages()
     {
         var consumer = Substitute.For<IKafkaConsumerService>();

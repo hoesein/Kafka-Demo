@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Cronos;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -13,6 +14,7 @@ public sealed class WorkerEngine : BackgroundService, IWorkerEngine
     private readonly ILogger<WorkerEngine> _logger;
     private readonly TimeProvider _timeProvider;
     private readonly HashSet<string> _inFlightWorkers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _lastRunUtc = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _lock = new();
 
     public WorkerEngine(
@@ -65,6 +67,7 @@ public sealed class WorkerEngine : BackgroundService, IWorkerEngine
             {
                 await handler.ExecuteAsync(context, cancellationToken);
                 var finishedAt = DateTimeOffset.UtcNow;
+                _lastRunUtc[definition.WorkerName] = finishedAt;
                 _historyStore?.RecordCompletion(definition.WorkerName, definition.WorkerType, correlationId, true, 1, null, startedAt, finishedAt);
                 _logger.LogInformation("Worker {WorkerName} completed successfully.", definition.WorkerName);
                 return;
@@ -86,6 +89,7 @@ public sealed class WorkerEngine : BackgroundService, IWorkerEngine
         }
 
         var failedAt = DateTimeOffset.UtcNow;
+        _lastRunUtc[definition.WorkerName] = failedAt;
         _historyStore?.RecordCompletion(definition.WorkerName, definition.WorkerType, correlationId, false, 0, lastException?.Message ?? "Worker execution failed.", startedAt, failedAt);
         _logger.LogError(lastException, "Worker {WorkerName} reached the retry limit and failed.", definition.WorkerName);
     }
@@ -97,6 +101,15 @@ public sealed class WorkerEngine : BackgroundService, IWorkerEngine
 
         foreach (var definition in definitions)
         {
+            if (!_registry.TryGet(definition.WorkerType, out _))
+            {
+                _logger.LogDebug(
+                    "Skipping worker {WorkerName} ({WorkerType}) because this host does not register that handler type.",
+                    definition.WorkerName,
+                    definition.WorkerType);
+                continue;
+            }
+
             if (!IsDueNow(definition, now.UtcDateTime))
             {
                 continue;
@@ -135,11 +148,27 @@ public sealed class WorkerEngine : BackgroundService, IWorkerEngine
             return false;
         }
 
-        var cron = CronExpression.Parse(definition.CronExpression);
-        var previous = utcNow.AddMinutes(-1);
-        var next = cron.GetNextOccurrence(previous, TimeZoneInfo.Utc);
+        try
+        {
+            var cron = CronExpression.Parse(definition.CronExpression);
+            var tolerance = TimeSpan.FromSeconds(15);
+            var baseTime = _lastRunUtc.TryGetValue(definition.WorkerName, out var lastRun)
+                ? lastRun.UtcDateTime
+                : utcNow.Subtract(tolerance);
 
-        return next is not null && next.Value <= utcNow.AddSeconds(10);
+            var next = cron.GetNextOccurrence(baseTime, TimeZoneInfo.Utc);
+            if (next is null)
+            {
+                return false;
+            }
+
+            return next.Value >= utcNow.Subtract(tolerance) && next.Value <= utcNow;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Invalid cron expression '{CronExpression}' for worker {WorkerName}.", definition.CronExpression, definition.WorkerName);
+            return false;
+        }
     }
 
     private bool TryAcquire(string workerName)
